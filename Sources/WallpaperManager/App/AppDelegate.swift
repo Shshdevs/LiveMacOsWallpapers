@@ -266,12 +266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         managerWindow?.invalidateThumbnail(for: playlistID)
         serviceStatus = count == urls.count ? "Добавлено видео: \(count)" : "Добавлено видео: \(count) из \(urls.count)"
-        if activePlaylistID == playlistID {
-            startPlaylist(playlistID)
-        } else {
-            refreshServiceCatalog()
-            renderWindow()
-        }
+        refreshServiceCatalog()
+        renderWindow()
     }
 
     private func reorderVideo(_ videoURL: URL, in playlistID: UUID, direction: Int) {
@@ -283,12 +279,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videos.swapAt(sourceIndex, destinationIndex)
         playlists[index].videoOrder = videos.map(\.lastPathComponent)
         library.save(playlists)
-        if activePlaylistID == playlistID {
-            startPlaylist(playlistID)
-        } else {
-            refreshServiceCatalog()
-            renderWindow()
-        }
+        refreshServiceCatalog()
+        renderWindow()
     }
 
     private func removeVideo(_ videoURL: URL, from playlistID: UUID) {
@@ -302,7 +294,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if library.videos(in: playlists[index]).isEmpty {
                     performStopService()
                 } else {
-                    startPlaylist(playlistID)
+                    refreshServiceCatalog()
+                    renderWindow()
                 }
             } else {
                 refreshServiceCatalog()
@@ -347,12 +340,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         playlists[index].timerDurationMinutes = max(1, min(minutes, 1440))
         playlists[index].hotkeyEnabled = hotkeyEnabled
         library.save(playlists)
-        if activePlaylistID == id {
-            startPlaylist(id)
-        } else {
-            refreshServiceCatalog()
-            renderWindow()
-        }
+        refreshServiceCatalog()
+        renderWindow()
     }
 
     private func changeHotkey(_ hotkey: GlobalHotkey, purpose: HotkeyPurpose) {

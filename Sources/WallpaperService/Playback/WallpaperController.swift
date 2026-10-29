@@ -13,6 +13,7 @@ final class WallpaperController {
     private var hotkeyEnabled = false
     private var currentIndex = 0
     private var completionObserver: NSObjectProtocol?
+    private var itemStatusObservation: NSKeyValueObservation?
     private var playlistCatalog: [ServicePlaylist] = []
     private var activePlaylistID: UUID?
     private var timer: Timer?
@@ -69,13 +70,75 @@ final class WallpaperController {
             playbackMode: playlist.playbackMode,
             timerDurationMinutes: playlist.timerDurationMinutes,
             hotkeyEnabled: playlist.hotkeyEnabled,
-            videoOrder: playlist.videoOrder ?? []
+            videoOrder: playlist.videoOrder ?? [],
+            animated: player != nil
         )
         activePlaylistID = playlist.id
     }
 
     func updatePlaylistCatalog(_ catalog: [ServicePlaylist]) {
         playlistCatalog = catalog
+        guard let activePlaylistID,
+              let playlist = catalog.first(where: { $0.id == activePlaylistID }) else { return }
+        updateActivePlaylist(playlist)
+    }
+
+    private func updateActivePlaylist(_ playlist: ServicePlaylist) {
+        let previousMode = playbackMode
+        let previousTimerDuration = timerDurationMinutes
+        let previousTimerDeadline = timerDeadline
+        let wasPaused = player?.timeControlStatus == .paused
+        let currentFile = files.indices.contains(currentIndex) ? files[currentIndex] : nil
+        let availableFiles = (try? FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: playlist.folderPath),
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ))?.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending } ?? []
+        let filesByName = Dictionary(uniqueKeysWithValues: availableFiles.map { ($0.lastPathComponent, $0) })
+        let orderedFiles = (playlist.videoOrder ?? []).compactMap { filesByName[$0] }
+        let orderedNames = Set(orderedFiles.map(\.lastPathComponent))
+        let updatedFiles = orderedFiles + availableFiles.filter { !orderedNames.contains($0.lastPathComponent) }
+
+        playlistCatalog = playlistCatalog.map { $0.id == playlist.id ? playlist : $0 }
+        playbackMode = playlist.playbackMode
+        timerDurationMinutes = max(1, playlist.timerDurationMinutes)
+        hotkeyEnabled = playlist.hotkeyEnabled
+
+        guard !updatedFiles.isEmpty else {
+            stop()
+            return
+        }
+
+        let currentName = currentFile?.lastPathComponent
+        files = updatedFiles
+        if let currentName, let updatedIndex = files.firstIndex(where: { $0.lastPathComponent == currentName }) {
+            currentIndex = updatedIndex
+        } else {
+            currentIndex = 0
+            desktopWallpaperBackup.applyPoster(from: files[currentIndex])
+            playCurrentFile(animatedTransition: true)
+            if wasPaused { player?.pause() }
+        }
+
+        updateTimerAfterSettingsChange(previousMode: previousMode, previousTimerDuration: previousTimerDuration, previousTimerDeadline: previousTimerDeadline)
+    }
+
+    private func updateTimerAfterSettingsChange(previousMode: PlaylistPlaybackMode, previousTimerDuration: Int, previousTimerDeadline: Date?) {
+        guard playbackMode == .loopForDuration, !files.isEmpty else {
+            timer?.invalidate()
+            timer = nil
+            timerDeadline = nil
+            remainingTimerInterval = nil
+            return
+        }
+
+        if previousMode != .loopForDuration || timer == nil {
+            resetTimer()
+        } else if previousTimerDuration != timerDurationMinutes {
+            let remaining = previousTimerDeadline.map { max(1, $0.timeIntervalSinceNow) } ?? TimeInterval(timerDurationMinutes * 60)
+            scheduleTimer(after: min(remaining, TimeInterval(timerDurationMinutes * 60)))
+        }
     }
 
     func switchPlaylist(direction: Int) {
@@ -85,8 +148,20 @@ final class WallpaperController {
         start(playlist: playlistCatalog[nextIndex], catalog: playlistCatalog)
     }
 
-    private func start(folderURL: URL, playbackMode: PlaylistPlaybackMode, timerDurationMinutes: Int, hotkeyEnabled: Bool, videoOrder: [String]) {
-        stop()
+    private func start(folderURL: URL, playbackMode: PlaylistPlaybackMode, timerDurationMinutes: Int, hotkeyEnabled: Bool, videoOrder: [String], animated: Bool = false) {
+        if animated {
+            timer?.invalidate()
+            timer = nil
+            timerDeadline = nil
+            remainingTimerInterval = nil
+            if let completionObserver {
+                NotificationCenter.default.removeObserver(completionObserver)
+                self.completionObserver = nil
+            }
+            files.removeAll()
+        } else {
+            stop()
+        }
         self.playbackMode = playbackMode
         self.timerDurationMinutes = max(1, timerDurationMinutes)
         self.hotkeyEnabled = hotkeyEnabled
@@ -104,8 +179,10 @@ final class WallpaperController {
         guard !files.isEmpty else { return }
         currentIndex = 0
         desktopWallpaperBackup.captureAndApplyPoster(from: files[currentIndex])
-        createWallpaperWindows()
-        playCurrentFile()
+        if windows.isEmpty {
+            createWallpaperWindows()
+        }
+        playCurrentFile(animatedTransition: animated)
         resetTimer()
     }
 
@@ -139,6 +216,7 @@ final class WallpaperController {
     }
 
     private func stopPlayback() {
+        itemStatusObservation = nil
         if let completionObserver {
             NotificationCenter.default.removeObserver(completionObserver)
             self.completionObserver = nil
@@ -181,14 +259,24 @@ final class WallpaperController {
         windows.compactMap { $0.contentView as? AVPlayerView }.forEach { $0.player = player }
     }
 
-    private func playCurrentFile() {
+    private func playCurrentFile(animatedTransition: Bool = false) {
         guard !files.isEmpty, let player else { return }
+        let overlays = animatedTransition ? transitionOverlays() : []
+        itemStatusObservation = nil
         if let completionObserver {
             NotificationCenter.default.removeObserver(completionObserver)
         }
 
         let item = AVPlayerItem(url: files[currentIndex])
         player.replaceCurrentItem(with: item)
+        if !overlays.isEmpty {
+            itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+                guard item.status == .readyToPlay else { return }
+                DispatchQueue.main.async {
+                    self?.fadeOut(overlays)
+                }
+            }
+        }
         completionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -197,6 +285,32 @@ final class WallpaperController {
             self?.playNextFile()
         }
         player.play()
+    }
+
+    private func transitionOverlays() -> [NSView] {
+        windows.compactMap { window in
+            guard let contentView = window.contentView,
+                  let bitmap = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) else { return nil }
+            contentView.cacheDisplay(in: contentView.bounds, to: bitmap)
+            let imageView = NSImageView(frame: contentView.bounds)
+            imageView.image = NSImage(size: bitmap.size)
+            imageView.image?.addRepresentation(bitmap)
+            imageView.imageScaling = .scaleAxesIndependently
+            imageView.autoresizingMask = [.width, .height]
+            contentView.addSubview(imageView, positioned: .above, relativeTo: nil)
+            return imageView
+        }
+    }
+
+    private func fadeOut(_ overlays: [NSView]) {
+        guard !overlays.isEmpty else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.65
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            overlays.forEach { $0.animator().alphaValue = 0 }
+        } completionHandler: {
+            overlays.forEach { $0.removeFromSuperview() }
+        }
     }
 
     private func playNextFile() {
@@ -209,7 +323,7 @@ final class WallpaperController {
         }
         currentIndex = (currentIndex + 1) % files.count
         desktopWallpaperBackup.applyPoster(from: files[currentIndex])
-        playCurrentFile()
+        playCurrentFile(animatedTransition: true)
     }
 
     func hotkeyPressed() {
@@ -225,7 +339,7 @@ final class WallpaperController {
         guard !files.isEmpty else { return }
         currentIndex = (currentIndex + 1) % files.count
         desktopWallpaperBackup.applyPoster(from: files[currentIndex])
-        playCurrentFile()
+        playCurrentFile(animatedTransition: true)
     }
 
     private func resetTimer() {

@@ -43,8 +43,18 @@ final class DesktopWallpaperBackup {
     }
 
     func applyPoster(from videoURL: URL) {
-        guard let image = Self.firstFrame(of: videoURL),
-              let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else { return }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
+        generator.appliesPreferredTrackTransform = true
+        generator.generateCGImageAsynchronously(for: .zero) { [weak self] image, _, _ in
+            guard let self, let image else { return }
+            DispatchQueue.main.async {
+                self.storeAndApplyPoster(image)
+            }
+        }
+    }
+
+    private func storeAndApplyPoster(_ image: CGImage) {
+        guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else { return }
         try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let newPosterURL = directoryURL.appendingPathComponent("wallpaper-poster-\(UUID().uuidString).jpg")
         do {
@@ -150,9 +160,4 @@ final class DesktopWallpaperBackup {
         (screen.deviceDescription[ NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
-    private static func firstFrame(of url: URL) -> CGImage? {
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-        generator.appliesPreferredTrackTransform = true
-        return try? generator.copyCGImage(at: .zero, actualTime: nil)
-    }
 }

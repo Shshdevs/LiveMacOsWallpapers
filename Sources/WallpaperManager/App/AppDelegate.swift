@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         serviceRunner.onTermination = { [weak self] in
             guard let self else { return }
+            if self.serviceRunner.isAvailable() {
+                self.serviceStatus = "Служба запущена"
+                self.renderWindow()
+                return
+            }
             self.serviceStatus = "Служба остановлена"
             if self.shouldResumePlayback, let id = self.activePlaylistID, self.playlist(for: id) != nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

@@ -20,7 +20,10 @@ final class WallpaperPlaybackService: NSObject, NSApplicationDelegate {
             }
         }
         self.server = server
-        server.start()
+        guard server.start() else {
+            NSApp.terminate(nil)
+            return
+        }
         hotkeyMonitor.register(.default)
     }
 

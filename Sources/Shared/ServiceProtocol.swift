@@ -154,16 +154,22 @@ final class ServiceSocketServer {
         self.onCommand = onCommand
     }
 
-    func start() {
+    func start() -> Bool {
         let socketURL = URL(fileURLWithPath: ServiceSocket.path)
         try? FileManager.default.createDirectory(
             at: socketURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        unlink(ServiceSocket.path)
+
+        if FileManager.default.fileExists(atPath: ServiceSocket.path) {
+            if ServiceSocket.send(ServiceCommand(.ping)) {
+                return false
+            }
+            unlink(ServiceSocket.path)
+        }
 
         descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else { return false }
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -178,7 +184,7 @@ final class ServiceSocketServer {
         guard copied else {
             Darwin.close(descriptor)
             descriptor = -1
-            return
+            return false
         }
 
         let bound = withUnsafePointer(to: &address) { pointer in
@@ -189,13 +195,14 @@ final class ServiceSocketServer {
         guard bound == 0, listen(descriptor, 8) == 0 else {
             Darwin.close(descriptor)
             descriptor = -1
-            return
+            return false
         }
         chmod(ServiceSocket.path, mode_t(S_IRUSR | S_IWUSR))
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.acceptConnections()
         }
+        return true
     }
 
     private func acceptConnections() {

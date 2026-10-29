@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Живые обои</title>
+    <options customize="never" require-scripts="false" hostArchitectures="@HOST_ARCHITECTURE@" />
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true" />
+    <welcome file="welcome.html" mime-type="text/html" />
+    <conclusion file="conclusion.html" mime-type="text/html" />
+    <choices-outline>
+        <line choice="default" />
+    </choices-outline>
+    <choice id="default" visible="false">
+        <pkg-ref id="local.livemacoswallpapers.manager" />
+    </choice>
+    <pkg-ref id="local.livemacoswallpapers.manager" version="@VERSION@" onConclusion="none">LiveWallpapersComponent.pkg</pkg-ref>
+</installer-gui-script>

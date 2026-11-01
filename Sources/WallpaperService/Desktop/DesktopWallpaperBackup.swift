@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 final class DesktopWallpaperBackup {
@@ -20,6 +21,71 @@ final class DesktopWallpaperBackup {
         backupURL = directoryURL.appendingPathComponent("desktop-wallpaper-backup.json")
         legacyPosterURL = directoryURL.appendingPathComponent("current-wallpaper-poster.jpg")
         restoreStaleBackup()
+    }
+
+    func captureAndApplyPoster(from videoURL: URL) {
+        guard savedEntries.isEmpty else {
+            applyPoster(from: videoURL)
+            return
+        }
+
+        try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        savedEntries = NSScreen.screens.compactMap { screen in
+            guard let displayID = Self.displayID(for: screen),
+                  let imageURL = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+            originalOptions[displayID] = NSWorkspace.shared.desktopImageOptions(for: screen)
+            return Entry(displayID: displayID, imagePath: imageURL.path)
+        }
+        saveBackup()
+        applyPoster(from: videoURL)
+    }
+
+    func applyPoster(from videoURL: URL) {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
+        generator.appliesPreferredTrackTransform = true
+        generator.generateCGImageAsynchronously(for: .zero) { [weak self] image, _, _ in
+            guard let self, let image else { return }
+            DispatchQueue.main.async {
+                self.storeAndApplyPoster(image)
+            }
+        }
+    }
+
+    func reapplyCurrentPoster() {
+        guard fileManager.fileExists(atPath: legacyPosterURL.path) else { return }
+        for screen in NSScreen.screens {
+            let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                .allowClipping: true
+            ]
+            try? NSWorkspace.shared.setDesktopImageURL(legacyPosterURL, for: screen, options: options)
+        }
+    }
+
+    private func storeAndApplyPoster(_ image: CGImage) {
+        guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else { return }
+        try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        do {
+            try data.write(to: legacyPosterURL, options: .atomic)
+        } catch {
+            return
+        }
+        var appliedToScreen = false
+        for screen in NSScreen.screens {
+            let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+                .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                .allowClipping: true
+            ]
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(legacyPosterURL, for: screen, options: options)
+                appliedToScreen = true
+            } catch {
+                continue
+            }
+        }
+        if !appliedToScreen, savedEntries.isEmpty {
+            try? fileManager.removeItem(at: legacyPosterURL)
+        }
     }
 
     func restore() {
@@ -52,8 +118,19 @@ final class DesktopWallpaperBackup {
     private func restoreStaleBackup() {
         guard let data = try? Data(contentsOf: backupURL),
               let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return }
-        savedEntries = entries
+        savedEntries = entries.filter { !isGeneratedPoster(URL(fileURLWithPath: $0.imagePath)) }
+        guard !savedEntries.isEmpty else {
+            try? fileManager.removeItem(at: legacyPosterURL)
+            try? fileManager.removeItem(at: backupURL)
+            removeOrphanedPosters()
+            return
+        }
         restore()
+    }
+
+    private func isGeneratedPoster(_ url: URL) -> Bool {
+        guard url.deletingLastPathComponent().standardizedFileURL == directoryURL.standardizedFileURL else { return false }
+        return url.lastPathComponent.hasPrefix("wallpaper-poster-") || url.lastPathComponent == legacyPosterURL.lastPathComponent
     }
 
     private func saveBackup() {

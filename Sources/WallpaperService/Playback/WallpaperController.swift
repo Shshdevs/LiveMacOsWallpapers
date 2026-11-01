@@ -19,18 +19,9 @@ final class WallpaperController {
     private var timer: Timer?
     private var timerDeadline: Date?
     private var remainingTimerInterval: TimeInterval?
-    private var spaceChangeObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
-    private let desktopWallpaperBackup = DesktopWallpaperBackup()
-
     init() {
-        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.desktopWallpaperBackup.reapplyCurrentPoster()
-        }
+        _ = DesktopWallpaperBackup()
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -41,9 +32,6 @@ final class WallpaperController {
     }
 
     deinit {
-        if let spaceChangeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver)
-        }
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -57,7 +45,6 @@ final class WallpaperController {
             windows.forEach { $0.orderFrontRegardless() }
         }
         player?.play()
-        desktopWallpaperBackup.reapplyCurrentPoster()
         if playbackMode == .loopForDuration, timer == nil {
             resetTimer()
         }
@@ -116,7 +103,6 @@ final class WallpaperController {
             currentIndex = updatedIndex
         } else {
             currentIndex = 0
-            desktopWallpaperBackup.applyPoster(from: files[currentIndex])
             playCurrentFile(animatedTransition: true)
             if wasPaused { player?.pause() }
         }
@@ -178,7 +164,6 @@ final class WallpaperController {
 
         guard !files.isEmpty else { return }
         currentIndex = 0
-        desktopWallpaperBackup.captureAndApplyPoster(from: files[currentIndex])
         if windows.isEmpty {
             createWallpaperWindows()
         }
@@ -212,7 +197,6 @@ final class WallpaperController {
         files.removeAll()
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()
-        desktopWallpaperBackup.restore()
     }
 
     private func stopPlayback() {
@@ -322,7 +306,6 @@ final class WallpaperController {
             return
         }
         currentIndex = (currentIndex + 1) % files.count
-        desktopWallpaperBackup.applyPoster(from: files[currentIndex])
         playCurrentFile(animatedTransition: true)
     }
 
@@ -338,7 +321,6 @@ final class WallpaperController {
     private func advanceToNextFile() {
         guard !files.isEmpty else { return }
         currentIndex = (currentIndex + 1) % files.count
-        desktopWallpaperBackup.applyPoster(from: files[currentIndex])
         playCurrentFile(animatedTransition: true)
     }
 
